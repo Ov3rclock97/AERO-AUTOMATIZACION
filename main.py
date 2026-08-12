@@ -16,7 +16,7 @@ def select_serial_port():
         if os.path.exists(puerto):
             encontrados.append(puerto)
             
-    if no encontrados:
+    if not encontrados:
         print("[-] No se detectó automáticamente ningún adaptador en las rutas comunes de Android.")
         print("[!] Verifica los permisos OTG o si necesitas usar termux-usb.")
         print("Puedes escribir manualmente la ruta de tu puerto (ej: /dev/ttyUSB0) o presionar Enter para salir.")
