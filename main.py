@@ -4,90 +4,164 @@ import re
 import sys
 import os
 
-def detect_serial_port():
-    print("[*] Buscando adaptadores USB-Serial comunes en Android/Termux...")
-    # Rutas comunes donde Android asigna los adaptadores USB a Serial
+def select_serial_port():
+    print("\n--- SELECCIÓN DE PUERTO USB ---")
     posibles_puertos = [
         '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2',
         '/dev/ttyACM0', '/dev/ttyACM1'
     ]
     
+    encontrados = []
     for puerto in posibles_puertos:
         if os.path.exists(puerto):
-            print(f"[+] ¡Adaptador detectado en {puerto}!")
-            return puerto
+            encontrados.append(puerto)
             
-    print("[-] No se detectó ningún adaptador USB-Serial en las rutas estándar (/dev/ttyUSB0, etc).")
-    print("[!] Es posible que necesites permisos de Termux o que tu dispositivo no esté reconociendo el cable OTG.")
-    return None
+    if no encontrados:
+        print("[-] No se detectó automáticamente ningún adaptador en las rutas comunes de Android.")
+        print("[!] Verifica los permisos OTG o si necesitas usar termux-usb.")
+        print("Puedes escribir manualmente la ruta de tu puerto (ej: /dev/ttyUSB0) o presionar Enter para salir.")
+        rut = input(">> Ruta del puerto: ").strip()
+        return rut if rut else None
 
-def get_equipment_info(port):
+    print("[+] Puertos detectados:")
+    for i, p in enumerate(encontrados):
+        print(f"  {i + 1}. {p}")
+    print(f"  {len(encontrados) + 1}. Ingresar ruta manualmente")
+    
+    while True:
+        opc = input("Selecciona una opción: ").strip()
+        if opc.isdigit():
+            idx = int(opc) - 1
+            if 0 <= idx < len(encontrados):
+                return encontrados[idx]
+            elif idx == len(encontrados):
+                rut = input(">> Ruta manual: ").strip()
+                return rut if rut else None
+        print("[-] Opción inválida.")
+
+def select_vendor():
+    print("\n--- TIPO DE EQUIPO ---")
+    print("1. Cisco")
+    print("2. MikroTik")
+    print("3. Huawei")
+    print("4. Genérico")
+    
+    while True:
+        opc = input("Selecciona la marca del equipo: ").strip()
+        if opc in ['1', '2', '3', '4']:
+            return int(opc)
+        print("[-] Opción inválida.")
+
+def select_action():
+    print("\n--- ACCIÓN A REALIZAR ---")
+    print("1. Extraer Modelo")
+    print("2. Extraer MAC Address")
+    print("3. Extraer Ambos")
+    print("4. Salir")
+    
+    while True:
+        opc = input("Selecciona una acción: ").strip()
+        if opc in ['1', '2', '3', '4']:
+            return int(opc)
+        print("[-] Opción inválida.")
+
+def run_extraction(port, vendor, action):
     try:
-        print(f"[*] Conectando al puerto {port} a 9600 baudios...")
-        # Configuración por defecto de consola (9600 8N1)
+        print(f"\n[*] Abriendo conexión serie en {port} a 9600 baudios...")
         ser = serial.Serial(
-            port=port,
-            baudrate=9600,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=2
+            port=port, baudrate=9600, bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2
         )
         
         if not ser.is_open:
             print("[-] No se pudo abrir el puerto.")
             return
 
-        print("[+] Conexión establecida. Iniciando lectura...")
-        
-        # Enviar un par de 'Enters' para despertar la consola
+        print("[+] Conectado. Despertando consola...")
         ser.write(b'\r\n\r\n')
         time.sleep(1)
-        ser.read_all() # Limpiar buffer
+        ser.read_all() # Limpiar
+        
+        # Configurar comandos según Vendor
+        cmd_modelo = b'\r\n'
+        cmd_mac = b'\r\n'
+        regex_modelo = r''
+        regex_mac = r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}|([0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4}'
 
-        # Enviamos comando genérico de Cisco/Switch 'show version'
-        # Dependiendo del equipo (MikroTik, Huawei), estos comandos cambiarán.
-        print("[*] Obteniendo versión y modelo...")
-        ser.write(b'show version\r\n')
-        time.sleep(2)
-        output = ser.read_all().decode('utf-8', errors='ignore')
-        
-        # Enviamos comando para MAC (Cisco: show interfaces, MikroTik: interface print, etc)
-        ser.write(b'show interfaces\r\n')
-        time.sleep(2)
-        output_mac = ser.read_all().decode('utf-8', errors='ignore')
-        
+        if vendor == 1: # Cisco
+            cmd_modelo = b'show version\r\n'
+            cmd_mac = b'show interfaces\r\n'
+            regex_modelo = r'(?i)(?:cisco|model number|hardware)\s*:?\s*([A-Za-z0-9-]+)'
+        elif vendor == 2: # MikroTik
+            cmd_modelo = b'system resource print\r\n'
+            cmd_mac = b'interface print\r\n'
+            regex_modelo = r'(?i)board-name:\s*([A-Za-z0-9-]+)'
+        elif vendor == 3: # Huawei
+            cmd_modelo = b'display version\r\n'
+            cmd_mac = b'display interface\r\n'
+            regex_modelo = r'(?i)HUAWEI\s+([A-Za-z0-9-]+)\s+Routing'
+        else:
+            # Genérico
+            cmd_modelo = b'show version\r\n'
+            cmd_mac = b'show interfaces\r\n'
+            regex_modelo = r'(?i)model\s*:?\s*([A-Za-z0-9-]+)'
+
+        out_modelo = ""
+        out_mac = ""
+
+        # Extraer Modelo
+        if action in [1, 3]:
+            print("[*] Ejecutando comando de modelo...")
+            ser.write(cmd_modelo)
+            time.sleep(2)
+            out_modelo = ser.read_all().decode('utf-8', errors='ignore')
+
+        # Extraer MAC
+        if action in [2, 3]:
+            print("[*] Ejecutando comando de MAC...")
+            ser.write(cmd_mac)
+            time.sleep(2)
+            out_mac = ser.read_all().decode('utf-8', errors='ignore')
+
         ser.close()
-        
-        # --- Análisis Básico (Expresiones Regulares) ---
-        
-        # Modelo (Heurística genérica buscando "Model", "Hardware", o "Cisco")
-        model = "Desconocido"
-        model_match = re.search(r'(?i)(?:model number|hardware|cisco|hw type)\s*:?\s*([A-Za-z0-9-]+)', output)
-        if model_match:
-            model = model_match.group(1)
-            
-        # MAC Address (Heurística buscando formato xx:xx:xx:xx:xx:xx o xxxx.xxxx.xxxx)
-        mac = "Desconocida"
-        mac_match = re.search(r'(?i)([0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}[:-][0-9a-f]{2}|[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4})', output_mac)
-        if mac_match:
-            mac = mac_match.group(1)
 
+        # Mostrar Resultados
         print("\n" + "="*40)
-        print(" RESUMEN DEL EQUIPO CONECTADO")
+        print(" RESULTADOS")
         print("="*40)
-        print(f" Puerto Usado : {port}")
-        print(f" Modelo Aprox : {model}")
-        print(f" Dirección MAC: {mac}")
+        if action in [1, 3]:
+            m = re.search(regex_modelo, out_modelo)
+            print(" Modelo : " + (m.group(1) if m else "No detectado (Intenta ajustar el regex)"))
+        
+        if action in [2, 3]:
+            m = re.search(regex_mac, out_mac)
+            print(" MAC    : " + (m.group(0) if m else "No detectada"))
         print("="*40 + "\n")
 
     except Exception as e:
-        print(f"[-] Error al interactuar con el puerto serie: {e}")
+        print(f"\n[-] Error de conexión o lectura: {e}")
 
 if __name__ == "__main__":
-    print("=== AERO-AUTOMATIZACION ===")
-    port = detect_serial_port()
-    if port:
-        get_equipment_info(port)
-    else:
-        print("[-] Abortando. Compruebe la conexión de su cable consola USB.")
+    print("="*40)
+    print(" AERO-AUTOMATIZACION - MODO INTERACTIVO")
+    print("="*40)
+    
+    port = select_serial_port()
+    if not port:
+        print("[-] Saliendo...")
+        sys.exit(0)
+        
+    vendor = select_vendor()
+    
+    while True:
+        action = select_action()
+        if action == 4:
+            print("[-] Saliendo...")
+            break
+            
+        run_extraction(port, vendor, action)
+        
+        cont = input("¿Deseas realizar otra acción en este mismo equipo? (s/n): ").strip().lower()
+        if cont != 's':
+            print("[-] Saliendo...")
+            break
