@@ -1,31 +1,25 @@
 import serial
-import serial.tools.list_ports
 import time
 import re
 import sys
+import os
 
 def detect_serial_port():
-    print("[*] Buscando adaptadores USB-Serial conectados...")
-    ports = list(serial.tools.list_ports.comports())
+    print("[*] Buscando adaptadores USB-Serial comunes en Android/Termux...")
+    # Rutas comunes donde Android asigna los adaptadores USB a Serial
+    posibles_puertos = [
+        '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2',
+        '/dev/ttyACM0', '/dev/ttyACM1'
+    ]
     
-    usb_ports = [p for p in ports if 'USB' in p.description.upper() or 'USB' in p.device.upper()]
-    
-    if not usb_ports:
-        print("[-] No se detectó ningún adaptador USB-Serial.")
-        # Como fallback (útil en Termux con termux-usb o proot) listamos todos
-        if ports:
-            print("[!] Puertos disponibles encontrados:")
-            for i, p in enumerate(ports):
-                print(f"  {i+1}: {p.device} - {p.description}")
-            return ports[0].device
-        return None
-        
-    print("[+] Adaptadores USB encontrados:")
-    for i, p in enumerate(usb_ports):
-        print(f"  {i+1}: {p.device} - {p.description}")
-        
-    # Por defecto tomamos el primero
-    return usb_ports[0].device
+    for puerto in posibles_puertos:
+        if os.path.exists(puerto):
+            print(f"[+] ¡Adaptador detectado en {puerto}!")
+            return puerto
+            
+    print("[-] No se detectó ningún adaptador USB-Serial en las rutas estándar (/dev/ttyUSB0, etc).")
+    print("[!] Es posible que necesites permisos de Termux o que tu dispositivo no esté reconociendo el cable OTG.")
+    return None
 
 def get_equipment_info(port):
     try:
