@@ -1,0 +1,2 @@
+# pydantic-settings needed for BaseSettings
+pydantic-settings>=2.2.1
